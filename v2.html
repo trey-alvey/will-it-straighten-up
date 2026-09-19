@@ -1222,49 +1222,62 @@ function drawTerrain(g, W, H, F){
 // A 3-D box glyph: front face, side face, two-tone pitched roof, soft drop
 // shadow. states: ok | evac (green check badge) | flooded (lower half
 // hidden behind a per-house surge band) | dark.
-function drawHouse3D(g, F, xkm, ykm, sizePx, state){
-  var hw = sizePx*0.42/F.s, dep = sizePx*0.30/F.s, wallH = sizePx*0.60/F.s, roofH = sizePx*0.50/F.s;
-  function pt(dx,dy,dz){ return F.T(xkm+dx, ykm+dy, dz); }
-  var dark = state==='dark', flood = state==='flooded';
-  var flBase=pt(-hw,0,0), frBase=pt(hw,0,0), flTop=pt(-hw,0,wallH), frTop=pt(hw,0,wallH);
-  var srBase=pt(hw,dep,0), srTop=pt(hw,dep,wallH), apex=pt(0,dep*0.5,wallH+roofH);
-  var shBase = pt(0, dep*0.9, 0);
-  g.save(); g.globalAlpha=0.30; g.fillStyle='#020608';
-  g.beginPath(); g.ellipse(shBase[0], shBase[1]+sizePx*0.05, sizePx*0.62, sizePx*0.20, 0,0,6.2832); g.fill();
-  g.restore();
-
-  g.fillStyle = dark ? '#232830' : (flood ? '#4d5866' : '#b8a67d');
-  g.beginPath(); g.moveTo(frBase[0],frBase[1]); g.lineTo(frTop[0],frTop[1]);
-  g.lineTo(srTop[0],srTop[1]); g.lineTo(srBase[0],srBase[1]); g.closePath(); g.fill();
-  g.fillStyle = dark ? '#2d333c' : (flood ? '#5c6a78' : '#ede1c4');
-  g.beginPath(); g.moveTo(flBase[0],flBase[1]); g.lineTo(flTop[0],flTop[1]);
-  g.lineTo(frTop[0],frTop[1]); g.lineTo(frBase[0],frBase[1]); g.closePath(); g.fill();
-  g.fillStyle = (dark||flood) ? '#171b21' : '#a94b3a';
-  g.beginPath(); g.moveTo(flTop[0],flTop[1]); g.lineTo(apex[0],apex[1]); g.lineTo(frTop[0],frTop[1]); g.closePath(); g.fill();
-  g.fillStyle = (dark||flood) ? '#0f1216' : '#853a2d';
-  g.beginPath(); g.moveTo(frTop[0],frTop[1]); g.lineTo(apex[0],apex[1]); g.lineTo(srTop[0],srTop[1]); g.closePath(); g.fill();
-
-  if(flood){
-    var midL=pt(-hw,0,wallH*0.42), midR=pt(hw,0,wallH*0.42), midSR=pt(hw,dep,wallH*0.42);
-    g.save(); g.globalAlpha=0.72; g.fillStyle='#3f6f92';
-    g.beginPath();
-    g.moveTo(flBase[0],flBase[1]); g.lineTo(midL[0],midL[1]); g.lineTo(midR[0],midR[1]);
-    g.lineTo(midSR[0],midSR[1]); g.lineTo(srBase[0],srBase[1]); g.lineTo(frBase[0],frBase[1]);
-    g.closePath(); g.fill();
-    g.strokeStyle='rgba(230,245,255,.85)'; g.lineWidth=Math.max(1,sizePx*0.05);
-    g.beginPath(); g.moveTo(midL[0],midL[1]); g.lineTo(midR[0],midR[1]); g.lineTo(midSR[0],midSR[1]); g.stroke();
-    g.restore();
+// Cartoon house sprites in the same flat-illustration style as the cars:
+// front wall with door + windows, shaded side wall, gabled roof with overhang,
+// chimney. Drawn once per (palette, state) into an offscreen canvas.
+var HOUSE_PALETTE = [
+  {wall:'#f3e6c8', side:'#cdb98f', roof:'#c9584a', roof2:'#a6443a', door:'#5a7fb5'},
+  {wall:'#dfe9f2', side:'#b3c2d0', roof:'#5d7f9e', roof2:'#476680', door:'#c9584a'},
+  {wall:'#f7e2b0', side:'#d1b87f', roof:'#7a9a5b', roof2:'#5f7d45', door:'#8a5a3c'},
+  {wall:'#f6d6cf', side:'#d1aca4', roof:'#8c6b9c', roof2:'#6e5280', door:'#3d5a80'}
+];
+var HOUSE_SPRITES = {};
+function houseSprite(pi, state){
+  var key = pi+'|'+state; if(HOUSE_SPRITES[key]) return HOUSE_SPRITES[key];
+  var Wd=200, Ht=200, c=document.createElement('canvas'); c.width=Wd; c.height=Ht;
+  var g=c.getContext('2d'), P=HOUSE_PALETTE[pi], dark=(state==='dark'), flood=(state==='flooded');
+  var dim = dark||flood;
+  function col(x){ return dim ? shadeColor(x, dark?-70:-38) : x; }
+  // side wall (right, receding) then front wall
+  g.fillStyle=col(P.side); g.beginPath(); g.moveTo(130,90); g.lineTo(172,72); g.lineTo(172,166); g.lineTo(130,184); g.closePath(); g.fill();
+  g.fillStyle=col(P.wall); g.fillRect(34,90,96,94);
+  // roof: front gable + side slope + overhang
+  g.fillStyle=col(P.roof); g.beginPath(); g.moveTo(24,94); g.lineTo(82,38); g.lineTo(140,94); g.closePath(); g.fill();
+  g.fillStyle=col(P.roof2); g.beginPath(); g.moveTo(82,38); g.lineTo(124,20); g.lineTo(182,76); g.lineTo(140,94); g.closePath(); g.fill();
+  g.strokeStyle='rgba(0,0,0,.25)'; g.lineWidth=3; g.beginPath(); g.moveTo(24,94); g.lineTo(82,38); g.lineTo(140,94); g.stroke();
+  // chimney
+  g.fillStyle=col('#9a6b55'); g.fillRect(112,34,14,26); g.fillStyle=col('#6f4b3b'); g.fillRect(110,30,18,6);
+  // door + windows
+  g.fillStyle=col(P.door); g.beginPath(); g.moveTo(70,184); g.lineTo(70,140); g.arc(82,140,12,Math.PI,0); g.lineTo(94,184); g.closePath(); g.fill();
+  g.fillStyle='#f5d77a'; g.beginPath(); g.arc(90,162,2.2,0,6.283); g.fill();
+  g.fillStyle=dim?'#3a4653':'#bfe3f2'; g.fillRect(44,108,20,18); g.fillRect(100,108,20,18);
+  g.strokeStyle='rgba(255,255,255,.6)'; g.lineWidth=2; g.strokeRect(44,108,20,18); g.strokeRect(100,108,20,18);
+  g.beginPath(); g.moveTo(54,108); g.lineTo(54,126); g.moveTo(110,108); g.lineTo(110,126); g.stroke();
+  // ground line / base shadow strip
+  g.fillStyle='rgba(0,0,0,.18)'; g.fillRect(34,180,138,6);
+  if(flood){                                   // water over the lower half, foam line
+    g.fillStyle='rgba(70,140,205,.72)'; g.fillRect(14,140,180,58);
+    g.strokeStyle='rgba(235,250,255,.9)'; g.lineWidth=3; g.beginPath();
+    for(var x=14;x<=194;x+=12){ g.lineTo(x, 140 + (((x/12)|0)%2?3:-3)); } g.stroke();
   }
+  HOUSE_SPRITES[key]=c; return c;
+}
+function drawHouse3D(g, F, xkm, ykm, sizePx, state, idx){
+  var scr = F.T(xkm, ykm, 0), sp = houseSprite((idx||0)%HOUSE_PALETTE.length, state);
+  var w = sizePx*2.4, h = w;
+  g.save(); g.globalAlpha=0.30; g.fillStyle='#020608';
+  g.beginPath(); g.ellipse(scr[0]+w*0.04, scr[1]+sizePx*0.06, w*0.42, h*0.10, 0,0,6.2832); g.fill();
+  g.restore();
+  g.drawImage(sp, scr[0]-w*0.5, scr[1]-h*0.92, w, h);
   if(state==='evac'){
-    var badgeAt = pt(0, dep*0.2, wallH+roofH+sizePx*0.30/F.s);
+    var bx = scr[0], by = scr[1]-h*0.98;
     g.save();
-    g.fillStyle = '#0e1826'; g.beginPath(); g.arc(badgeAt[0],badgeAt[1], sizePx*0.30,0,6.2832); g.fill();
+    g.fillStyle = '#0e1826'; g.beginPath(); g.arc(bx,by, sizePx*0.30,0,6.2832); g.fill();
     g.strokeStyle='#46d39a'; g.lineWidth=Math.max(2,sizePx*0.10);
-    g.beginPath(); g.arc(badgeAt[0],badgeAt[1], sizePx*0.30,0,6.2832); g.stroke();
+    g.beginPath(); g.arc(bx,by, sizePx*0.30,0,6.2832); g.stroke();
     g.lineWidth=Math.max(2,sizePx*0.11); g.lineCap='round'; g.lineJoin='round';
-    g.beginPath(); g.moveTo(badgeAt[0]-sizePx*0.14,badgeAt[1]+0.01*sizePx);
-    g.lineTo(badgeAt[0]-sizePx*0.02,badgeAt[1]+sizePx*0.14);
-    g.lineTo(badgeAt[0]+sizePx*0.18,badgeAt[1]-sizePx*0.14); g.stroke();
+    g.beginPath(); g.moveTo(bx-sizePx*0.14,by+0.01*sizePx); g.lineTo(bx-sizePx*0.02,by+sizePx*0.14);
+    g.lineTo(bx+sizePx*0.18,by-sizePx*0.14); g.stroke();
     g.restore();
   }
 }
@@ -1277,7 +1290,7 @@ function drawHouses(g, W, H, F, stateFn){
   order.forEach(function(o){
     var p = HOUSES[o.i];
     var state = stateFn ? stateFn(o.i, p) : 'ok';
-    drawHouse3D(g, F, p[0], p[1], HOUSE_S, state);
+    drawHouse3D(g, F, p[0], p[1], HOUSE_S, state, o.i);
   });
 }
 function drawSwirlIcon(g, x, y, r, rot, alpha){
