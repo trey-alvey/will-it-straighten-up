@@ -891,12 +891,11 @@ var KM_PER_UNIT = 111.0;   // km per degree of latitude (also x's unit, since x 
 function geoxy(lon,lat){ return [(lon+88.5)*COS28*KM_PER_UNIT, (31.2-lat)*KM_PER_UNIT]; }
 var FLPOLY = FL_POLY_LL.map(function(p){ return geoxy(p[0],p[1]); });
 // ~16 house glyphs following the real coastal curve, Tampa Bay down to
-// Naples, plus 4 spread along the panhandle
+// Naples (panhandle houses removed 2026-09-19)
 var HOUSES_LL = [
   [-82.66,27.86],[-82.74,27.70],[-82.70,27.52],[-82.56,27.32],[-82.48,27.12],
   [-82.30,26.98],[-82.15,26.82],[-82.02,26.64],[-81.90,26.46],[-81.84,26.28],
-  [-81.80,26.10],
-  [-85.80,30.20],[-85.65,30.28],[-85.50,30.15],[-86.05,30.35]
+  [-81.80,26.10]
 ];
 var HOUSES = HOUSES_LL.map(function(p){ return geoxy(p[0],p[1]); });
 // storm track: approaches from the SW of Tampa Bay
@@ -1480,26 +1479,42 @@ function drawCar3D(g, F, xkm, ykm, fwd, sizePx, color, bounceKm){
   g.beginPath(); g.arc(tlL[0],tlL[1],Math.max(1,sizePx*0.045),0,6.2832); g.fill();
   g.beginPath(); g.arc(tlR[0],tlR[1],Math.max(1,sizePx*0.045),0,6.2832); g.fill();
 }
+// Evacuation: two cars per house scatter inland, each on its own heading
+// pointing away from the landfall point (clamped to the inland half-plane so
+// nobody drives into the Gulf), fast in the first ~2.5 s then coasting.
+var CAR_SEEDS = (function(){
+  var out = [];
+  HOUSES.forEach(function(h, hi){
+    for(var k=0;k<2;k++){
+      var ax = h[0]-STORM_LANDFALL[0], ay = h[1]-STORM_LANDFALL[1];
+      var ang = Math.atan2(ay, ax);                 // away from the storm
+      ang += ((hi*7+k*3)%5 - 2) * 0.28;             // deterministic fan, +-32 deg
+      // real evacuation routes run up the peninsula: clamp headings between
+      // north-north-west and east-north-east (km coords: east=+x, north=-y)
+      var angLo = -105*Math.PI/180, angHi = -20*Math.PI/180;
+      if(ang > angHi) ang = angHi; if(ang < angLo) ang = angLo;
+      out.push({x0:h[0]+k*2.5, y0:h[1]-k*2.5, vec:[Math.cos(ang), Math.sin(ang)],
+                speed: 120 + ((hi*5+k*11)%7)*12, idx: hi*2+k});
+    }
+  });
+  return out;
+})();
 function drawRoadAndCars(g, F, W, p, t){
-  g.save(); g.strokeStyle='rgba(185,195,210,.45)'; g.lineWidth=Math.max(2,W*0.006);
-  g.setLineDash([W*0.014,W*0.010]);
-  g.beginPath();
-  ROAD_PTS.forEach(function(pt,i){ var xy=F.T(pt[0],pt[1],0); i?g.lineTo(xy[0],xy[1]):g.moveTo(xy[0],xy[1]); });
-  g.stroke(); g.restore();
-  var N = 16, sizePx = W*0.012;
-  // depth-sort so a car nearer the viewer draws over one farther back
+  var sizePx = W*0.012;
+  var fast = Math.max(0, Math.min(1, (p-0.03)/0.42));
+  fast = 1 - Math.pow(1-fast, 2.2);                 // quick launch, then ease off
+  var coast = Math.max(0, p-0.45) * 40;
   var cars = [];
-  for(var c=0;c<N;c++){
-    var f5 = ((c/N) + p*1.05) % 1.2;
-    if(f5>1) continue;
-    var r = roadPointAt(f5);
-    var scr = F.T(r.pt[0], r.pt[1], 0);
-    cars.push({r:r, y:scr[1], idx:c});
-  }
-  cars.sort(function(a,b){ return a.y-b.y; });
+  CAR_SEEDS.forEach(function(c){
+    var d = c.speed*fast + coast;
+    var x = c.x0 + c.vec[0]*d, y = c.y0 + c.vec[1]*d;
+    var scr = F.T(x, y, 0);
+    cars.push({x:x, y:y, vec:c.vec, ys:scr[1], idx:c.idx});
+  });
+  cars.sort(function(a,b){ return a.ys-b.ys; });
   cars.forEach(function(cc){
-    var bounceKm = Math.sin(t*7 + cc.idx*1.9) * (sizePx*0.03/F.s);
-    drawCar3D(g, F, cc.r.pt[0], cc.r.pt[1], cc.r.vec, sizePx, CAR_COLORS[cc.idx%CAR_COLORS.length], bounceKm);
+    var bounceKm = Math.sin(t*9 + cc.idx*1.9) * (sizePx*0.04/F.s);
+    drawCar3D(g, F, cc.x, cc.y, cc.vec, sizePx, CAR_COLORS[cc.idx%CAR_COLORS.length], bounceKm);
   });
 }
 function ease(p){ return p<0.5 ? 2*p*p : 1-Math.pow(-2*p+2,2)/2; }
@@ -1520,14 +1535,14 @@ function conseqFrame(cv, R, outcome, p){
     // Gordon: SW Gulf -> Tampa Bay landfall over the first ~3.5s, shield
     // grows ~30%, rain falls near it; last ~2s a surge advances ~35 km
     // inland, flooding houses as it passes.
-    var approachEnd = 3.5/6, surgeStart = 4/6;
+    var approachEnd = 4.2/6, surgeStart = 4.5/6;
     var af = Math.min(1, ease(p)/approachEnd);
     var sp = [lerp(STORM_SEA[0],STORM_LANDFALL[0],af), lerp(STORM_SEA[1],STORM_LANDFALL[1],af)];
     var sizeKm = 300 * (1 + 0.30*af) * (1+0.03*Math.sin(t*1.6));
     var phi = t * (2*Math.PI/40);
     var surge = Math.max(0, Math.min(1, (ease(p)-surgeStart)/(1-surgeStart)));
     var surgeR = 35*surge;
-    var evacShown = outcome === 'hit' && ease(p) >= 1.5/6;
+    var evacShown = outcome === 'hit' && ease(p) >= 0.6/6;
 
     if(surgeR>0) drawSurgeDisc(g, F, STORM_LANDFALL, surgeR);
     drawHouses(g, W, H, F, function(i, hp){
@@ -1541,7 +1556,7 @@ function conseqFrame(cv, R, outcome, p){
     if(outcome === 'hit') drawRoadAndCars(g, F, W, ease(p), t);
     if(ease(p) < approachEnd) drawRain(g, F, sp[0], sp[1], 60, t, Math.min(1, ease(p)*3));
     drawStormShadow(g, F, sp[0], sp[1], sizeKm);
-    drawStormSprite(g, F, dpr, sprite, sp[0], sp[1], sizeKm, phi, 1, ease(p));
+    drawStormSprite(g, F, dpr, sprite, sp[0], sp[1], sizeKm, phi, 1, af);   // IR loop runs its full course during the approach, holds after landfall
     var lp = F.T(sp[0], sp[1], 0);
     label(g, R.title.toUpperCase(), lp[0] + sizeKm*F.s*0.30, lp[1], 11, 'rgba(225,235,250,.92)', 'left');
 
