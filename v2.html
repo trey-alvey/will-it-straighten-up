@@ -814,6 +814,46 @@ function stageMax(){
   return Math.max(240, h - 20);
 }
 
+// v1's initDrag calls redrawDecision(), and v1's redrawDecision/windLoop/
+// windStart reach for v1-only element ids and D.rounds[S.i]. In v2 that threw
+// before cacheScene ran, so a drag re-rendered only the wind particles over a
+// stale cached scene. Redeclare all three here so a drag redraws the whole
+// stage (volume + centers + shear dial) and re-caches it under the particles,
+// and so the bonus list (S.list) is honoured.
+function redrawDecision(){ redrawStage(); }
+function tweenFlat(done){
+  var a0=VIEW.az, e0=VIEW.el;
+  var a1=((a0+180)%360+360)%360-180;
+  if(Math.abs(a1)<0.5 && Math.abs(e0-90)<0.5){ VIEW.az=0; VIEW.el=90; return done(); }
+  var t0=performance.now(), DUR=480;
+  (function step(now){
+    var p=Math.min(1,(now-t0)/DUR), k=1-Math.pow(1-p,3);
+    VIEW.az=a1*(1-k); VIEW.el=e0+(90-e0)*k;
+    drawMain($('cvMain'), curRound(), 0, {cue:true, cueFade:true});
+    if(p<1) requestAnimationFrame(step); else { VIEW.az=0; VIEW.el=90; done(); }
+  })(t0);
+}
+function windLoop(){
+  var R = curRound();
+  if(!WIND.on || !R.wind || !SCENE){ WIND.raf = 0; return; }
+  var cv = $('cvMain'), g = cv.getContext('2d');
+  g.setTransform(1,0,0,1,0,0);
+  if(WIND.cache) g.drawImage(WIND.cache, 0, 0);
+  g.setTransform(SCENE.dpr,0,0,SCENE.dpr,0,0);
+  windStep(R); windDraw(R, g);
+  WIND.raf = requestAnimationFrame(windLoop);
+}
+function windStart(){
+  var R = curRound();
+  if(!R.wind) return;
+  if(!WIND.parts) WIND.parts = [];
+  var want = 420;
+  while(WIND.parts.length < want) WIND.parts.push(seedParticle(R, {}));
+  WIND.parts.length = want;
+  WIND.parts.forEach(function(p){ seedParticle(R, p); });
+  if(!WIND.raf) WIND.raf = requestAnimationFrame(windLoop);
+}
+
 // Dollar figures for the scoreboard. Placeholders were replaced 2026-09-18
 // with researched figures (cost_figures.md, researched 2026-09-18); patch here if
 // numbers change.
