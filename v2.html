@@ -1385,6 +1385,39 @@ function drawRain(g, F, xkm, ykm, radiusKm, t, alpha){
 // translucent blue surge "puddle": sampled as a world-space circle (radiusKm
 // about originKm) so it comes out a correctly-oblique ellipse, with a
 // white foam rim.
+// Storm surge as a band that rides up the whole Tampa-Naples coast: the
+// coast polyline (house line, nudged seaward) stroked wide in world km, so it
+// foreshortens with the map, plus an animated foam crest on its inland edge.
+var COAST_LINE = HOUSES.map(function(h){ return [h[0]-5, h[1]]; });
+function coastOffset(km){                      // polyline pushed inland (+x side) by km
+  return COAST_LINE.map(function(pt, i){
+    var a = COAST_LINE[Math.max(0,i-1)], b = COAST_LINE[Math.min(COAST_LINE.length-1,i+1)];
+    var dx=b[0]-a[0], dy=b[1]-a[1], L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L;
+    if(nx<0){ nx=-nx; ny=-ny; }                // normal pointing inland (east-ish)
+    return [pt[0]+nx*km, pt[1]+ny*km];
+  });
+}
+function strokeKmLine(g, F, pts, widthKm, style, dash){
+  g.beginPath();
+  pts.forEach(function(q,i){ var sc=F.T(q[0],q[1],0); i?g.lineTo(sc[0],sc[1]):g.moveTo(sc[0],sc[1]); });
+  g.lineCap='round'; g.lineJoin='round'; g.lineWidth=Math.max(1, widthKm*F.s*0.78);
+  g.strokeStyle=style; if(dash) g.setLineDash(dash); else g.setLineDash([]); g.stroke();
+}
+function drawSurgeBand(g, F, depthKm, t, over){
+  if(depthKm<=0) return;
+  g.save();
+  if(over){                                    // second pass over the houses: water on top
+    strokeKmLine(g, F, coastOffset(depthKm*0.45), depthKm*1.3, 'rgba(90,165,235,.22)');
+  } else {
+    strokeKmLine(g, F, coastOffset(depthKm*0.45), depthKm*1.6, 'rgba(60,130,200,.30)');
+    strokeKmLine(g, F, coastOffset(depthKm*0.45), depthKm*1.3, 'rgba(80,155,225,.55)');
+    var crest = coastOffset(depthKm*1.05);
+    strokeKmLine(g, F, crest, 3.2, 'rgba(240,250,255,.85)', [F.s*9, F.s*6]);
+    g.lineDashOffset = -t*F.s*40;
+    strokeKmLine(g, F, crest, 1.6, 'rgba(255,255,255,.9)', [F.s*5, F.s*9]);
+  }
+  g.restore();
+}
 function drawSurgeDisc(g, F, originKm, radiusKm){
   if(radiusKm<=0) return;
   var pts = [];
@@ -1624,28 +1657,33 @@ function conseqFrame(cv, R, outcome, p){
     // Gordon: SW Gulf -> Tampa Bay landfall over the first ~3.5s, shield
     // grows ~30%, rain falls near it; last ~2s a surge advances ~35 km
     // inland, flooding houses as it passes.
-    var approachEnd = 4.2/6, surgeStart = 4.5/6;
+    var approachEnd = 4.2/6, surgeStart = 4.35/6;
     var af = Math.min(1, ease(p)/approachEnd);
     var sp = [lerp(STORM_SEA[0],STORM_LANDFALL[0],af), lerp(STORM_SEA[1],STORM_LANDFALL[1],af)];
     var sizeKm = 300 * (1 + 0.30*af) * (1+0.03*Math.sin(t*1.6));
     var phi = t * (2*Math.PI/40);
-    var surge = Math.max(0, Math.min(1, (ease(p)-surgeStart)/(1-surgeStart)));
-    var surgeR = 35*surge;
+    var surge = Math.max(0, Math.min(1, (ease(p)-surgeStart)/(0.97-surgeStart)));
+    surge = 1 - Math.pow(1-surge, 2);           // rushes in, then stalls
+    var surgeDepth = 38*surge;                  // km inland, along the whole coast
     var evacShown = outcome === 'hit' && ease(p) >= 0.6/6;
 
-    if(surgeR>0) drawSurgeDisc(g, F, STORM_LANDFALL, surgeR);
+    drawSurgeBand(g, F, surgeDepth, t, false);
     drawHouses(g, W, H, F, function(i, hp){
-      if(surgeR>0 && distKm(hp, STORM_LANDFALL) <= surgeR) return 'flooded';
+      // water reaches houses nearest the landfall first, then runs south
+      var arrive = 0.25 + 0.45*Math.min(1, distKm(hp, STORM_LANDFALL)/220);
+      if(surge >= arrive) return 'flooded';
       return evacShown ? 'evac' : 'ok';
     });
+    drawSurgeBand(g, F, surgeDepth, t, true);
     // hit: the evacuation was ordered, so the convoy is on the road fleeing
     // inland well before the surge below arrives. damage (evac NOT ordered)
     // gets no cars. Drawn before the cloud shield/shadow so the storm layers
     // above the road, same as it does above the houses.
     if(outcome === 'hit') drawRoadAndCars(g, F, W, ease(p), t);
     if(ease(p) < approachEnd) drawRain(g, F, sp[0], sp[1], 60, t, Math.min(1, ease(p)*3));
-    drawStormShadow(g, F, sp[0], sp[1], sizeKm);
-    drawStormSprite(g, F, dpr, sprite, sp[0], sp[1], sizeKm, phi, 1, af);   // IR loop runs its full course during the approach, holds after landfall
+    var shieldA = 0.92 - 0.30*af;               // thins as it comes ashore so the coast reads through it
+    drawStormShadow(g, F, sp[0], sp[1], sizeKm, 0.55);
+    drawStormSprite(g, F, dpr, sprite, sp[0], sp[1], sizeKm, phi, shieldA, af);   // IR loop runs its full course during the approach, holds after landfall
     var lp = F.T(sp[0], sp[1], 0);
     label(g, R.title.toUpperCase(), lp[0] + sizeKm*F.s*0.30, lp[1], 11, 'rgba(225,235,250,.92)', 'left');
 
