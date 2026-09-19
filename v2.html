@@ -1493,6 +1493,28 @@ var CAR_PALETTE = [
 // Evacuation dispersion: two cars per house. Most head N or S along the
 // peninsula away from the landfall point (Tampa Bay); about a third keep an
 // inland NE/E heading so the spread reads as a scatter, not a column.
+function inLand(x, y){                       // even-odd point-in-polygon on the km outline
+  var inside = false, n = FLPOLY.length;
+  for(var i=0, j=n-1; i<n; j=i++){
+    var xi=FLPOLY[i][0], yi=FLPOLY[i][1], xj=FLPOLY[j][0], yj=FLPOLY[j][1];
+    if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) inside = !inside;
+  }
+  return inside;
+}
+// farthest a car can drive along its heading and stay ~6 km inside the coast
+function landReach(x0, y0, vec, maxKm){
+  // houses sit on the simplified coastline, so the first few km can read as
+  // water: skip up to 30 km to get onto land, then measure until leaving it.
+  // The outline is ~6 km coarse, so tolerate water gaps up to 16 km (bays,
+  // causeways) before calling it the open Gulf.
+  var ok = 0, entered = false, gap = 0;
+  for(var d=0; d<=maxKm; d+=2){
+    var on = inLand(x0+vec[0]*d, y0+vec[1]*d);
+    if(!entered){ if(on) entered = true; else if(d > 30) return 0; else continue; }
+    if(on){ ok = d; gap = 0; } else { gap += 2; if(gap > 16) break; }
+  }
+  return entered ? Math.max(0, ok-6) : 0;
+}
 var CAR_SEEDS = (function(){
   var out = [], D = Math.PI/180;
   HOUSES.forEach(function(h, hi){
@@ -1501,13 +1523,21 @@ var CAR_SEEDS = (function(){
       if(k===1 && hi%3===0){                        // a few: inland NE/E
         ang = -55*D + jit*2; speed = 110 + (hi%3)*15;
       } else if(hi < 4){                            // Tampa-Sarasota: north, fanned NNW..NNE
-        ang = -84*D + jit*1.5 + (k?-9*D:10*D); speed = 140 + (hi%4)*15;
+        ang = -72*D + jit*1.5 + (k?-8*D:8*D); speed = 140 + (hi%4)*15;
       } else {                                      // south of Sarasota: the coast bends SE here,
         ang = 48*D + jit*2 + (k?14*D:-8*D);         // so "south" means SE (east=0, south=+90) toward the Everglades
         speed = 75 + (hi%4)*10;
       }
-      out.push({x0:h[0]+k*3, y0:h[1]-k*3, vec:[Math.cos(ang), Math.sin(ang)],
-                speed: speed, idx: idx, col: idx % CAR_PALETTE.length});
+      var x0=h[0]+k*3, y0=h[1]-k*3, best=null;
+      // try the intended heading, then swing it in 12-deg steps until the
+      // route stays on land for at least 60 km; keep the longest otherwise
+      [0, -12, 12, -24, 24, -36, 36].some(function(off){
+        var a2 = ang + off*D, v=[Math.cos(a2), Math.sin(a2)], r = landReach(x0, y0, v, 400);
+        if(!best || r > best.reach) best = {vec:v, reach:r};
+        return r >= 60;
+      });
+      out.push({x0:x0, y0:y0, vec:best.vec, speed: speed, idx: idx, col: idx % CAR_PALETTE.length,
+                reach: best.reach});
     }
   });
   return out;
@@ -1560,12 +1590,12 @@ function drawCarFlat(g, F, xkm, ykm, vec, sizePx, ci, bouncePx){
 }
 function drawRoadAndCars(g, F, W, p, t){
   var sizePx = W*0.012;
-  var fast = Math.max(0, Math.min(1, (p-0.03)/0.42));
+  var fast = Math.max(0, Math.min(1, (p-0.03)/0.50));
   fast = 1 - Math.pow(1-fast, 2.2);                 // quick launch, then ease off
-  var coast = Math.max(0, p-0.45) * 40;
+  var coast = Math.max(0, p-0.53) * 40;
   var cars = [];
   CAR_SEEDS.forEach(function(c){
-    var d = c.speed*fast + coast;
+    var d = Math.min(c.reach, c.speed*fast + coast);
     var x = c.x0 + c.vec[0]*d, y = c.y0 + c.vec[1]*d;
     var scr = F.T(x, y, 0);
     cars.push({x:x, y:y, vec:c.vec, ys:scr[1], idx:c.idx, col:c.col});
@@ -1660,7 +1690,7 @@ function consequence(R, saysAligns, freezeAt){
   if(freezeAt != null){
     conseqFrame($('cvConseq'), R, outcome, Math.max(0,Math.min(1,freezeAt)));
   } else {
-    var dur = window.__AUTOPLAY__===0 ? 0 : 5800;
+    var dur = window.__AUTOPLAY__===0 ? 0 : 8500;
     var t0 = performance.now();
     (function step(now){
       var p = dur<=0 ? 1 : Math.min(1, (now-t0)/dur);
