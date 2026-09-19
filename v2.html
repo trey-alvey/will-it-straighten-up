@@ -1482,23 +1482,82 @@ function drawCar3D(g, F, xkm, ykm, fwd, sizePx, color, bounceKm){
 // Evacuation: two cars per house scatter inland, each on its own heading
 // pointing away from the landfall point (clamped to the inland half-plane so
 // nobody drives into the Gulf), fast in the first ~2.5 s then coasting.
+var CAR_PALETTE = [
+  {body:'#ef6a5c', win:'#dfe6ec', bags:['#f4c542','#f08a7d','#6fa8dc']},
+  {body:'#4f8fd6', win:'#e3ebf2', bags:['#f08a7d','#f4c542','#7fc98a']},
+  {body:'#f2c14e', win:'#e6ecf1', bags:['#6fa8dc','#ef6a5c','#c9a36b']},
+  {body:'#66c48d', win:'#e4ecf0', bags:['#f4c542','#6fa8dc','#ef6a5c']},
+  {body:'#b57edc', win:'#e6e6f0', bags:['#ef6a5c','#f4c542','#7fc98a']},
+  {body:'#eaeaea', win:'#d5dde6', bags:['#6fa8dc','#f08a7d','#f4c542']}
+];
+// Evacuation dispersion: two cars per house. Most head N or S along the
+// peninsula away from the landfall point (Tampa Bay); about a third keep an
+// inland NE/E heading so the spread reads as a scatter, not a column.
 var CAR_SEEDS = (function(){
-  var out = [];
+  var out = [], D = Math.PI/180;
   HOUSES.forEach(function(h, hi){
     for(var k=0;k<2;k++){
-      var ax = h[0]-STORM_LANDFALL[0], ay = h[1]-STORM_LANDFALL[1];
-      var ang = Math.atan2(ay, ax);                 // away from the storm
-      ang += ((hi*7+k*3)%5 - 2) * 0.28;             // deterministic fan, +-32 deg
-      // real evacuation routes run up the peninsula: clamp headings between
-      // north-north-west and east-north-east (km coords: east=+x, north=-y)
-      var angLo = -105*Math.PI/180, angHi = -20*Math.PI/180;
-      if(ang > angHi) ang = angHi; if(ang < angLo) ang = angLo;
-      out.push({x0:h[0]+k*2.5, y0:h[1]-k*2.5, vec:[Math.cos(ang), Math.sin(ang)],
-                speed: 120 + ((hi*5+k*11)%7)*12, idx: hi*2+k});
+      var jit = ((hi*7+k*3)%5 - 2) * 6*D, ang, speed, idx = hi*2+k;
+      if(k===1 && hi%3===0){                        // a few: inland NE/E
+        ang = -55*D + jit*2; speed = 110 + (hi%3)*15;
+      } else if(hi < 4){                            // Tampa-Sarasota: north, fanned NNW..NNE
+        ang = -84*D + jit*1.5 + (k?-9*D:10*D); speed = 140 + (hi%4)*15;
+      } else {                                      // south of Sarasota: the coast bends SE here,
+        ang = 48*D + jit*2 + (k?14*D:-8*D);         // so "south" means SE (east=0, south=+90) toward the Everglades
+        speed = 75 + (hi%4)*10;
+      }
+      out.push({x0:h[0]+k*3, y0:h[1]-k*3, vec:[Math.cos(ang), Math.sin(ang)],
+                speed: speed, idx: idx, col: idx % CAR_PALETTE.length});
     }
   });
   return out;
 })();
+// Flat cartoon car sprite (side view, rounded body, windows, suitcases strapped
+// on the roof), drawn once per color into an offscreen canvas and billboarded.
+var CAR_SPRITES = [];
+function carSprite(ci){
+  if(CAR_SPRITES[ci]) return CAR_SPRITES[ci];
+  var Wd=200, Ht=150, c=document.createElement('canvas'); c.width=Wd; c.height=Ht;
+  var g=c.getContext('2d'), P=CAR_PALETTE[ci];
+  function rr(x,y,w,h,r){ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r); g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); }
+  // suitcases (bottom to top, shrinking), with straps and handles
+  var bags=[[38,62,124,22],[52,42,96,20],[66,24,70,18]];
+  bags.forEach(function(b,i){
+    g.fillStyle=P.bags[i]; rr(b[0],b[1],b[2],b[3],5); g.fill();
+    g.fillStyle='rgba(0,0,0,.18)'; g.fillRect(b[0]+b[2]*0.18,b[1],5,b[3]); g.fillRect(b[0]+b[2]*0.78,b[1],5,b[3]);
+    g.strokeStyle='#1f3a5a'; g.lineWidth=3; g.beginPath(); g.moveTo(b[0]+b[2]/2-9,b[1]+1); g.lineTo(b[0]+b[2]/2+9,b[1]+1); g.stroke();
+  });
+  // body + cabin
+  g.fillStyle=P.body; rr(12,96,176,36,14); g.fill();
+  g.beginPath(); g.moveTo(44,98); g.quadraticCurveTo(52,74,80,72); g.lineTo(138,72); g.quadraticCurveTo(160,74,170,98); g.closePath(); g.fill();
+  // windows
+  g.fillStyle=P.win;
+  g.beginPath(); g.moveTo(54,96); g.quadraticCurveTo(60,80,82,78); g.lineTo(104,78); g.lineTo(104,96); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(110,78); g.lineTo(136,78); g.quadraticCurveTo(154,80,160,96); g.lineTo(110,96); g.closePath(); g.fill();
+  g.fillStyle='rgba(255,255,255,.55)'; g.beginPath(); g.moveTo(62,96); g.lineTo(78,80); g.lineTo(86,80); g.lineTo(70,96); g.closePath(); g.fill();
+  // door line, handle, lights
+  g.strokeStyle='rgba(0,0,0,.35)'; g.lineWidth=2; g.beginPath(); g.moveTo(107,80); g.lineTo(107,128); g.stroke();
+  g.fillStyle='rgba(0,0,0,.25)'; rr(90,104,14,5,2); g.fill();
+  g.fillStyle='#ffe9a8'; rr(176,104,10,8,3); g.fill();       // headlight (front = +x)
+  g.fillStyle='#e0413a'; rr(14,104,9,8,3); g.fill();         // taillight
+  // wheels
+  [[52,130],[148,130]].forEach(function(w){
+    g.fillStyle='#213a52'; g.beginPath(); g.arc(w[0],w[1],17,0,6.283); g.fill();
+    g.fillStyle='#cfd8e0'; g.beginPath(); g.arc(w[0],w[1],9,0,6.283); g.fill();
+    g.fillStyle='#213a52'; g.beginPath(); g.arc(w[0],w[1],3,0,6.283); g.fill();
+  });
+  CAR_SPRITES[ci]=c; return c;
+}
+function drawCarFlat(g, F, xkm, ykm, vec, sizePx, ci, bouncePx){
+  var scr = F.T(xkm, ykm, 0), sp = carSprite(ci);
+  var w = sizePx*3.2, h = w*0.75, faceLeft = vec[0] < 0;
+  // ground shadow
+  g.save(); g.fillStyle='rgba(0,0,0,.28)'; g.beginPath();
+  g.ellipse(scr[0], scr[1]+h*0.02, w*0.42, h*0.09, 0, 0, 6.283); g.fill(); g.restore();
+  g.save(); g.translate(scr[0], scr[1] - h*0.36 + (bouncePx||0));
+  if(faceLeft) g.scale(-1,1);
+  g.drawImage(sp, -w/2, -h/2, w, h); g.restore();
+}
 function drawRoadAndCars(g, F, W, p, t){
   var sizePx = W*0.012;
   var fast = Math.max(0, Math.min(1, (p-0.03)/0.42));
@@ -1509,12 +1568,12 @@ function drawRoadAndCars(g, F, W, p, t){
     var d = c.speed*fast + coast;
     var x = c.x0 + c.vec[0]*d, y = c.y0 + c.vec[1]*d;
     var scr = F.T(x, y, 0);
-    cars.push({x:x, y:y, vec:c.vec, ys:scr[1], idx:c.idx});
+    cars.push({x:x, y:y, vec:c.vec, ys:scr[1], idx:c.idx, col:c.col});
   });
   cars.sort(function(a,b){ return a.ys-b.ys; });
   cars.forEach(function(cc){
-    var bounceKm = Math.sin(t*9 + cc.idx*1.9) * (sizePx*0.04/F.s);
-    drawCar3D(g, F, cc.x, cc.y, cc.vec, sizePx, CAR_COLORS[cc.idx%CAR_COLORS.length], bounceKm);
+    var bounce = Math.sin(t*11 + cc.idx*1.9) * sizePx*0.06;
+    drawCarFlat(g, F, cc.x, cc.y, cc.vec, sizePx, cc.col, bounce);
   });
 }
 function ease(p){ return p<0.5 ? 2*p*p : 1-Math.pow(-2*p+2,2)/2; }
